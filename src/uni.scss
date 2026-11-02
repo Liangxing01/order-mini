@@ -1,0 +1,61 @@
+/* 全局变量与混入，会被 uni-app 自动注入每一个 scss 片段，禁止在此处输出 CSS */
+
+/* 主题色 */
+$c-primary: #e9b93b;
+$c-primary-light: #f4cf5b;
+$c-primary-pale: #fbe9a8;
+$c-primary-ink: #8a6a12;
+
+/* 中性色 */
+$c-bg: #fbf7f2;
+$c-card: #ffffff;
+$c-text: #3d3d3d;
+$c-text-2: #6b6b6b;
+$c-text-3: #a8a296;
+$c-line: #f1ebe1;
+$c-danger: #e8684a;
+$c-success: #59a86b;
+
+/* 圆角 */
+$radius-sm: 12rpx;
+$radius-md: 20rpx;
+$radius-lg: 28rpx;
+$radius-xl: 36rpx;
+
+/* 阴影 */
+$shadow-card: 0 8rpx 24rpx rgba(175, 148, 96, 0.08);
+$shadow-float: 0 -6rpx 30rpx rgba(175, 148, 96, 0.14);
+
+@mixin ellipsis($line: 1) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  @if $line == 1 {
+    white-space: nowrap;
+  } @else {
+    display: -webkit-box;
+    -webkit-line-clamp: $line;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+  }
+}
+
+@mixin hairline($color: $c-line, $dir: bottom) {
+  position: relative;
+  &::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    #{$dir}: 0;
+    height: 1px;
+    background: $color;
+    transform: scaleY(0.5);
+    transform-origin: 0 0;
+  }
+}
+
+@mixin center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

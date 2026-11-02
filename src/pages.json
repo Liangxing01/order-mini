@@ -1,0 +1,109 @@
+{
+  "easycom": {
+    "autoscan": true
+  },
+  "pages": [
+    {
+      "path": "pages/order/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "点菜"
+      }
+    },
+    {
+      "path": "pages/record/index",
+      "style": {
+        "navigationBarTitleText": "食记"
+      }
+    },
+    {
+      "path": "pages/record/detail",
+      "style": {
+        "navigationBarTitleText": "订单详情"
+      }
+    },
+    {
+      "path": "pages/kitchen/index",
+      "style": {
+        "navigationBarTitleText": "厨房"
+      }
+    },
+    {
+      "path": "pages/mine/index",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/dish/edit",
+      "style": {
+        "navigationBarTitleText": "添加菜品"
+      }
+    },
+    {
+      "path": "pages/dish/detail",
+      "style": {
+        "navigationBarTitleText": "菜品详情"
+      }
+    },
+    {
+      "path": "pages/dish/manage",
+      "style": {
+        "navigationBarTitleText": "管理菜品"
+      }
+    },
+    {
+      "path": "pages/category/manage",
+      "style": {
+        "navigationBarTitleText": "分类管理"
+      }
+    },
+    {
+      "path": "pages/rank/index",
+      "style": {
+        "navigationBarTitleText": "热度排行",
+        "enablePullDownRefresh": true
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "蓝宝宝专属小厨房",
+    "navigationBarBackgroundColor": "#FBF7F2",
+    "backgroundColor": "#FBF7F2",
+    "backgroundColorTop": "#FBF7F2",
+    "backgroundColorBottom": "#FBF7F2"
+  },
+  "tabBar": {
+    "color": "#B9B4A8",
+    "selectedColor": "#E9B93B",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/order/index",
+        "text": "点菜",
+        "iconPath": "static/tabbar/order.png",
+        "selectedIconPath": "static/tabbar/order-on.png"
+      },
+      {
+        "pagePath": "pages/record/index",
+        "text": "食记",
+        "iconPath": "static/tabbar/record.png",
+        "selectedIconPath": "static/tabbar/record-on.png"
+      },
+      {
+        "pagePath": "pages/kitchen/index",
+        "text": "厨房",
+        "iconPath": "static/tabbar/kitchen.png",
+        "selectedIconPath": "static/tabbar/kitchen-on.png"
+      },
+      {
+        "pagePath": "pages/mine/index",
+        "text": "我",
+        "iconPath": "static/tabbar/mine.png",
+        "selectedIconPath": "static/tabbar/mine-on.png"
+      }
+    ]
+  }
+}
