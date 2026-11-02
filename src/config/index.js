@@ -13,7 +13,8 @@ export const FN = {
   dish: 'dish',
   order: 'order',
   rank: 'rank',
-  stats: 'stats'
+  stats: 'stats',
+  file: 'file'
 }
 
 /** 餐次 */

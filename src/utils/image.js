@@ -1,4 +1,5 @@
-import { initCloud } from '@/api/cloud'
+import { initCloud, call } from '@/api/cloud'
+import { FN } from '@/config'
 
 /**
  * 云存储图片处理。
@@ -7,6 +8,10 @@ import { initCloud } from '@/api/cloud'
  * 就会被当成相对路径去请求（渲染层网络层直接报 Failed to load image）。
  * 所以缩略图必须基于 getTempFileURL 换来的 https 临时链接再拼参数，
  * 原图的 fileID 反而可以直连，用作最后的兜底。
+ *
+ * 取链接分两步：先走客户端（自己的图最快），拿不到再走 file 云函数。
+ * 云函数是管理端权限，绕得开云存储「仅创建者可读写」的限制——
+ * 否则家人 / 体验者永远看不到别人上传的菜图。
  */
 
 /** 常用宽度（px），按展示尺寸取最接近的一档，够清晰又省流量 */
@@ -49,36 +54,63 @@ export function withThumb(src, width) {
   return `${src}${sep}imageView2/2/w/${Math.round(size)}`
 }
 
-/** 同一帧内收集到的 fileID 合并成一次 getTempFileURL */
-function flush() {
+/** 客户端直接换：上传者本人最快，但「仅创建者可读写」下别人的图会被拒 */
+function localTempUrls(fileList) {
+  return wx.cloud.getTempFileURL({ fileList }).then((res) => {
+    const map = {}
+    ;(res.fileList || []).forEach((file) => {
+      if (file.status === 0 && file.tempFileURL) map[file.fileID] = file.tempFileURL
+    })
+    return map
+  })
+}
+
+/** 云函数兜底：管理端权限，任何登录用户都能取到链接 */
+async function remoteTempUrls(fileList) {
+  const map = {}
+  for (let i = 0; i < fileList.length; i += MAX_BATCH) {
+    const chunk = fileList.slice(i, i + MAX_BATCH)
+    const res = await call(FN.file, 'tempUrls', { fileList: chunk })
+    ;((res && res.list) || []).forEach((file) => {
+      if (file.tempFileURL) map[file.fileID] = file.tempFileURL
+    })
+  }
+  return map
+}
+
+/** 同一帧内收集到的 fileID 合并成一次请求 */
+async function flush() {
   flushTimer = null
   const items = queue.splice(0, MAX_BATCH)
   if (!items.length) return
 
-  wx.cloud
-    .getTempFileURL({ fileList: items.map((item) => item.fileID) })
-    .then((res) => {
-      const map = {}
-      ;(res.fileList || []).forEach((file) => {
-        map[file.fileID] = file
-      })
-      items.forEach((item) => {
-        const hit = map[item.fileID]
-        pending.delete(item.fileID)
-        if (hit && hit.status === 0 && hit.tempFileURL) {
-          urlCache.set(item.fileID, { url: hit.tempFileURL, expire: Date.now() + CACHE_TTL })
-          item.resolve(hit.tempFileURL)
-        } else {
-          item.reject(new Error((hit && hit.errMsg) || '获取图片链接失败'))
-        }
-      })
-    })
-    .catch((err) => {
-      items.forEach((item) => {
-        pending.delete(item.fileID)
-        item.reject(err)
-      })
-    })
+  const fileList = items.map((item) => item.fileID)
+  let map = {}
+  try {
+    map = await localTempUrls(fileList)
+  } catch (err) {
+    map = {}
+  }
+
+  const missing = fileList.filter((id) => !map[id])
+  if (missing.length) {
+    try {
+      Object.assign(map, await remoteTempUrls(missing))
+    } catch (err) {
+      // 云函数也失败时按失败处理，调用方退回 fileID 直连
+    }
+  }
+
+  items.forEach((item) => {
+    pending.delete(item.fileID)
+    const url = map[item.fileID]
+    if (url) {
+      urlCache.set(item.fileID, { url, expire: Date.now() + CACHE_TTL })
+      item.resolve(url)
+    } else {
+      item.reject(new Error('获取图片链接失败'))
+    }
+  })
 
   if (queue.length && !flushTimer) flushTimer = setTimeout(flush, 0)
 }

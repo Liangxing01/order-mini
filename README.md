@@ -33,7 +33,7 @@ src/
   static/         tabbar 图标、hero 插画、头像
   store/          pinia：user / menu / cart
   utils/          date.js / image.js / ui.js
-cloudfunctions/   initdb / user / category / dish / order / rank / stats
+cloudfunctions/   initdb / user / category / dish / order / rank / stats / file
 scripts/          gen-tabbar-icons.js / optimize-images.js / sync-cloud.js
 ```
 
@@ -71,9 +71,9 @@ npm run build:mp-weixin
 
 ### 4. 上传云函数
 
-右键 `cloudfunctions` 下的每个目录 → **上传并部署：云端安装依赖**，共 7 个：
+右键 `cloudfunctions` 下的每个目录 → **上传并部署：云端安装依赖**，共 8 个：
 
-`initdb`、`user`、`category`、`dish`、`order`、`rank`、`stats`
+`initdb`、`user`、`category`、`dish`、`order`、`rank`、`stats`、`file`
 
 > `cloudfunctions/initdb/config.json` 里已写 `{"timeout": 20}`，上传部署时会自动生效，无需手动改。若已被部署过且报超时，可在云开发控制台 → 云函数 → `initdb` → 配置 → 超时时间 改为 20 秒。
 
@@ -99,7 +99,7 @@ npm run build:mp-weixin
 
 5 个集合的权限全部设为 **「仅管理端可读写」**（自定义规则 `{"read": false, "write": false}`）。所有读写都经由云函数，云函数使用管理员权限，不受该限制。
 
-云存储权限保持默认（所有用户可读、仅创建者可写）即可，菜品图片需要可读。
+云存储权限不用改（免费套餐也改不了安全规则）：如果是「仅创建者可读写」也没关系，图片链接走 `file` 云函数换取，云函数是管理端权限，家人和体验者照样能看到别人上传的图。
 
 ## 云函数约定
 
@@ -114,6 +114,7 @@ npm run build:mp-weixin
 | order | `submit` / `list` / `detail` / `cancel` / `finish` / `repeat` / `randomPick` / `planSave` / `planMove` / `planClear` |
 | rank | `hot`（`range: week / month / all`） |
 | stats | `overview` / `shoppingList` |
+| file | `tempUrls`（批量把 `cloud://` fileID 换成 https 临时链接）—— 用管理端权限，绕开存储安全规则限制 |
 
 云函数运行在 UTC 时区，日期统一用 `beijingDate()` 转成北京时间后再落库，避免「晚上 8 点后的单记到前一天」。
 
@@ -122,7 +123,7 @@ npm run build:mp-weixin
 ## 备注
 
 - 小程序主包限制 2MB，当前产物约 741KB；`hero-bg.png` 已压缩到 750×316（401KB），新增静态图请先压缩
-- 菜品图统一用 `<cloud-image>`（`size` 取 `avatar/thumb/card/cover/full`，对应 160/200/240/480/750px 宽），它会在 `cloud://` 文件 ID 后拼 `?imageView2/2/w/{宽度}`，由云存储 CDN 实时出缩略图；缩略图拉取失败时组件会自动回退原图，并把环境标记为「不支持图片处理」，因此无需担心白屏
+- 菜品图统一用 `<cloud-image>`（`size` 取 `avatar/thumb/card/cover/full`，对应 160/200/240/480/750px 宽）。`cloud://` fileID 会先用 `getTempFileURL` 换成 https 临时链接（客户端拿不到时走 `file` 云函数），再在链接上拼 `?imageView2/2/w/{宽度}` 由云存储 CDN 实时出缩略图；缩略图拉取失败时组件会自动回退原图，并把环境标记为「不支持图片处理」，因此无需担心白屏
 - `cloud-image` 默认懒加载，仅在页面 / `scroll-view` 滚动容器内生效；首屏头像等需要立即出现的图传 `:lazy="false"`
 - 微信 WXSS 不支持本地图片作 `background-image`，页面里统一用 `<image>` 元素铺底
 - 首个进入小程序的用户会被自动设为 `admin`，其余为 `member`；家人扫码或打开分享卡片进来即自动并入同一家庭（`familyId`），不需要邀请确认
