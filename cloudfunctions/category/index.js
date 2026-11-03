@@ -115,6 +115,15 @@ async function actionList(data = {}, openid) {
     dishCount: counts[cat._id] || 0
   }))
 
+  console.log(
+    '[category:list]',
+    JSON.stringify({
+      role: user.role,
+      familyId: user.familyId,
+      categories: list.length,
+      uncategorized: counts.count || 0
+    })
+  )
   return { list, uncategorizedCount: counts.count || 0 }
 }
 

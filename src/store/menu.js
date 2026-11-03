@@ -8,7 +8,7 @@ function emptyBucket() {
   return { list: [], page: 0, hasMore: true, loading: false, loaded: false }
 }
 
-/** 还没请求过的分类：返回「加载中」占位，切分类时右侧立刻清空，不会先显示空态或停在上一个分类 */
+/** 还没拿到当前分类的数据时的占位：右侧立刻进入加载态，不会停在上一个分类 */
 function pendingBucket() {
   return { list: [], page: 0, hasMore: true, loading: true, loaded: false }
 }
@@ -18,8 +18,13 @@ export const useMenuStore = defineStore('menu', {
     categories: [],
     uncategorizedCount: 0,
     currentId: '',
-    /** { [categoryId]: { list, page, hasMore, loading, loaded } } */
-    buckets: {},
+    /**
+     * 当前分类的菜品数据。
+     * 只保留当前分类、每次整体替换对象，比按分类 id 存 map 少一类「写进去读不到」的问题。
+     */
+    bucket: emptyBucket(),
+    /** bucket 属于哪个分类，用来判断数据是不是当前分类的 */
+    bucketCategoryId: '',
     keyword: '',
     searchBucket: emptyBucket(),
     categoriesLoaded: false
@@ -52,7 +57,9 @@ export const useMenuStore = defineStore('menu', {
     currentBucket(state) {
       if (state.keyword) return state.searchBucket
       if (!state.currentId) return emptyBucket()
-      return state.buckets[state.currentId] || pendingBucket()
+      // 手上这份数据不属于当前分类，说明还没开始请求
+      if (state.bucketCategoryId !== state.currentId) return pendingBucket()
+      return state.bucket
     },
 
     currentDishes() {
@@ -75,7 +82,8 @@ export const useMenuStore = defineStore('menu', {
     },
 
     invalidate() {
-      this.buckets = {}
+      this.bucket = emptyBucket()
+      this.bucketCategoryId = ''
       this.searchBucket = emptyBucket()
     },
 
@@ -83,6 +91,11 @@ export const useMenuStore = defineStore('menu', {
       this.currentId = id
       this.keyword = ''
       this.searchBucket = emptyBucket()
+      // 切到新分类先清空，避免右侧短暂显示上一个分类的菜
+      if (this.bucketCategoryId !== id) {
+        this.bucket = emptyBucket()
+        this.bucketCategoryId = id
+      }
     },
 
     /**
@@ -93,35 +106,38 @@ export const useMenuStore = defineStore('menu', {
       const categoryId = this.currentId
       if (!categoryId) return []
 
-      const bucket = this.buckets[categoryId] || emptyBucket()
-      if (bucket.loading) return bucket.list
-      if (!more && bucket.loaded && !force) return bucket.list
-      if (more && !bucket.hasMore) return bucket.list
-
-      bucket.loading = true
-      if (!more) {
-        bucket.page = 0
-        bucket.hasMore = true
+      const sameCategory = this.bucketCategoryId === categoryId
+      if (sameCategory && this.bucket.loading) return this.bucket.list
+      // 上次拿到的是空列表就不缓存，下次点这个分类会重新请求（可能刚加了菜）
+      if (!more && sameCategory && this.bucket.loaded && this.bucket.list.length && !force) {
+        return this.bucket.list
       }
-      this.buckets[categoryId] = bucket
+      if (more && sameCategory && !this.bucket.hasMore) return this.bucket.list
+
+      const page = more && sameCategory ? this.bucket.page : 0
+      const base = more && sameCategory ? this.bucket : emptyBucket()
+      this.bucketCategoryId = categoryId
+      this.bucket = { ...base, loading: true }
 
       try {
-        const res = await dishApi.list({
-          categoryId,
-          page: bucket.page,
-          pageSize: PAGE_SIZE
-        })
+        const res = await dishApi.list({ categoryId, page, pageSize: PAGE_SIZE })
+        // 请求期间又切了分类，这份结果直接丢掉
+        if (this.bucketCategoryId !== categoryId) return this.bucket.list
         const list = res.list || []
-        bucket.list = more ? bucket.list.concat(list) : list
-        bucket.page += 1
-        bucket.hasMore = list.length >= PAGE_SIZE
-        bucket.loaded = true
-      } finally {
-        bucket.loading = false
-        // 触发响应式更新
-        this.buckets = { ...this.buckets, [categoryId]: bucket }
+        this.bucket = {
+          list: more ? this.bucket.list.concat(list) : list,
+          page: page + 1,
+          hasMore: list.length >= PAGE_SIZE,
+          loading: false,
+          loaded: true
+        }
+      } catch (err) {
+        if (this.bucketCategoryId === categoryId) {
+          this.bucket = { ...this.bucket, loading: false }
+        }
+        throw err
       }
-      return bucket.list
+      return this.bucket.list
     },
 
     /** 搜索：跨分类 */
@@ -131,19 +147,22 @@ export const useMenuStore = defineStore('menu', {
         this.searchBucket = emptyBucket()
         return []
       }
-      const bucket = emptyBucket()
-      bucket.loading = true
-      this.searchBucket = bucket
+      this.searchBucket = { ...emptyBucket(), loading: true }
       try {
         const res = await dishApi.list({ keyword, page: 0, pageSize: PAGE_SIZE })
-        bucket.list = res.list || []
-        bucket.hasMore = (res.list || []).length >= PAGE_SIZE
-        bucket.loaded = true
-      } finally {
-        bucket.loading = false
-        this.searchBucket = { ...bucket, list: bucket.list }
+        const list = res.list || []
+        this.searchBucket = {
+          list,
+          page: 1,
+          hasMore: list.length >= PAGE_SIZE,
+          loading: false,
+          loaded: true
+        }
+        return list
+      } catch (err) {
+        this.searchBucket = { ...this.searchBucket, loading: false }
+        throw err
       }
-      return bucket.list
     },
 
     clearSearch() {
@@ -153,28 +172,20 @@ export const useMenuStore = defineStore('menu', {
 
     /** 本地同步新增/编辑后的菜品，避免整页刷新闪烁 */
     upsertDish(dish) {
-      const dishId = dish._id
-      Object.keys(this.buckets).forEach((key) => {
-        const bucket = this.buckets[key]
-        const idx = bucket.list.findIndex((d) => d._id === dishId)
-        const belongs = key === dish.categoryId
-        if (idx > -1 && !belongs) {
-          bucket.list.splice(idx, 1)
-        } else if (idx > -1) {
-          bucket.list.splice(idx, 1, { ...bucket.list[idx], ...dish })
-        } else if (belongs) {
-          bucket.list.unshift(dish)
-        }
-      })
-      this.buckets = { ...this.buckets }
+      const list = this.bucket.list.slice()
+      const idx = list.findIndex((d) => d._id === dish._id)
+      const belongs = dish.categoryId === this.bucketCategoryId
+      if (idx > -1) {
+        if (belongs) list.splice(idx, 1, { ...list[idx], ...dish })
+        else list.splice(idx, 1)
+      } else if (belongs) {
+        list.unshift(dish)
+      }
+      this.bucket = { ...this.bucket, list }
     },
 
     removeDish(dishId) {
-      Object.keys(this.buckets).forEach((key) => {
-        const bucket = this.buckets[key]
-        bucket.list = bucket.list.filter((d) => d._id !== dishId)
-      })
-      this.buckets = { ...this.buckets }
+      this.bucket = { ...this.bucket, list: this.bucket.list.filter((d) => d._id !== dishId) }
     }
   }
 })

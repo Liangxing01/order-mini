@@ -325,7 +325,8 @@ export default {
         if (!this.menu.currentId && this.menu.sideList.length) {
           this.menu.currentId = this.menu.sideList[0]._id
         }
-        await this.menu.loadDishes()
+        // 从添加/编辑菜品页回来时可能有新菜，强制重新拉一次当前分类
+        await this.menu.loadDishes({ force: true })
       } catch (err) {
         toastError(err, '菜品加载失败')
       }
@@ -337,7 +338,13 @@ export default {
       this.searchInput = ''
       this.scrollToTop()
       try {
-        await this.menu.loadDishes()
+        // 切分类一律重新拉，避免上次的缓存 / 空结果导致看不到菜
+        const list = await this.menu.loadDishes({ force: true })
+        const cat = this.menu.currentCategory
+        // 分类计数说有几道菜却一条没取到，说明是服务端过滤的问题，直接提示而不是白屏
+        if (!list.length && cat && cat.dishCount > 0) {
+          toast(`这个分类有 ${cat.dishCount} 道菜，但没取到，请稍后再试`)
+        }
       } catch (err) {
         toastError(err)
       }

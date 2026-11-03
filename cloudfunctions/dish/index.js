@@ -157,7 +157,10 @@ async function actionList(data = {}, openid) {
   if (keyword) {
     conditions.push({ name: db.RegExp({ regexp: escapeRegExp(keyword), options: 'i' }) })
   } else if (data.categoryId === 'uncategorized') {
-    conditions.push({ categoryId: _.in(['', null]) })
+    // 早期菜品可能没有 categoryId 字段，分类计数会把它们算进「未分类」，这里要一并查出来
+    conditions.push(
+      _.or([{ categoryId: _.in(['', null]) }, { categoryId: _.exists(false) }])
+    )
   } else if (data.categoryId) {
     conditions.push({ categoryId: data.categoryId })
   }
@@ -175,6 +178,15 @@ async function actionList(data = {}, openid) {
     .field(LIST_FIELD)
     .get()
 
+  console.log(
+    '[dish:list]',
+    JSON.stringify({
+      role: user.role,
+      familyId: user.familyId,
+      categoryId: data.categoryId || '',
+      count: res.data.length
+    })
+  )
   return { list: res.data, page, pageSize }
 }
 
