@@ -59,28 +59,91 @@ function groupByDate(list, key) {
   return map
 }
 
+/** 平台角色：supervip 看全部、vip 看本家庭、user 只看自己 */
+function normalizeRole(user) {
+  if (!user) return 'user'
+  if (user.role === 'admin' || user.role === 'member') return 'vip'
+  return user.role || 'user'
+}
+
+async function loadUser(openid) {
+  // 少传 openid 时 .doc() 只会抛「docId必须为字符串或数字」，这里给出可读的提示
+  if (!openid) throw new Error('未获取到用户身份，请重新进入小程序')
+  const res = await db.collection(USER).doc(openid).get().catch(() => null)
+  const user = (res && res.data) || {}
+  return {
+    openid,
+    role: normalizeRole(user),
+    familyId: user.familyId || ''
+  }
+}
+
+/** 菜品 / 分类可见范围（超级VIP 有家庭时也只看自己家） */
+function scopeCondition(user) {
+  if (user.familyId) {
+    return _.or([
+      { familyId: user.familyId },
+      { familyId: _.in(['', null]) },
+      { familyId: _.exists(false) }
+    ])
+  }
+  if (user.role === 'supervip') return null
+  return { creatorOpenid: user.openid }
+}
+
+/** 订单可见范围 */
+function orderScopeCondition(user) {
+  if (user.familyId) {
+    return _.or([
+      { familyId: user.familyId },
+      { familyId: _.in(['', null]) },
+      { familyId: _.exists(false) }
+    ])
+  }
+  if (user.role === 'supervip') return null
+  return { creatorOpenid: user.openid }
+}
+
+function combine(conditions) {
+  const list = conditions.filter(Boolean)
+  return list.length > 1 ? _.and(list) : list[0] || {}
+}
+
 /** 厨房总览：菜品分布、本周热菜、最新上传、成员数 */
-async function actionOverview() {
+async function actionOverview(data = {}, openid) {
+  const user = await loadUser(openid)
+  const dishScope = scopeCondition(user)
+  const orderScope = orderScopeCondition(user)
   const weekStart = beijingDate(Date.now() - 6 * 86400000)
   const now = new Date(Date.now() + 8 * 3600 * 1000)
   const monthStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`
 
-  const [dishCount, categoryList, memberCount, monthOrderCount, catAgg, recent, topAgg] =
+  const [dishCount, categoryList, memberCount, monthOrderCount, dishRows, recent, topAgg] =
     await Promise.all([
-      db.collection(DISH).count(),
-      db.collection(CATEGORY).orderBy('sort', 'asc').limit(100).get(),
-      db.collection(USER).count(),
+      db.collection(DISH).where(dishScope || {}).count(),
+      db
+        .collection(CATEGORY)
+        .where(dishScope || {})
+        .orderBy('sort', 'asc')
+        .limit(100)
+        .get(),
+      user.familyId
+        ? db.collection(USER).where({ familyId: user.familyId }).count()
+        : Promise.resolve({ total: 1 }),
       db
         .collection(ORDER)
-        .where({ date: _.gte(monthStart), status: _.in(['pending', 'finished']) })
+        .where(
+          combine([
+            orderScope,
+            { date: _.gte(monthStart), status: _.in(['pending', 'finished']) }
+          ])
+        )
         .count(),
+      // 分类分布：按当前可见范围取分类字段，本地汇总
+      db.collection(DISH).where(dishScope || {}).field({ categoryId: true }).limit(1000).get(),
       db
         .collection(DISH)
-        .aggregate()
-        .group({ _id: '$categoryId', count: $.sum(1) })
-        .end(),
-      db
-        .collection(DISH)
+        .where(dishScope || {})
         .orderBy('createTime', 'desc')
         .limit(6)
         .field({ name: true, cover: true, createTime: true, categoryId: true })
@@ -91,7 +154,7 @@ async function actionOverview() {
         .match({ date: _.gte(weekStart) })
         .group({ _id: '$dishId', score: $.sum('$weight'), actions: $.sum(1) })
         .sort({ score: -1 })
-        .limit(5)
+        .limit(20)
         .end()
     ])
 
@@ -100,15 +163,14 @@ async function actionOverview() {
     catMap[cat._id] = cat
   })
 
-  const catCounts = groupByDate(catAgg.list || [], '_id')
-  const categoryDist = (catAgg.list || []).map((row) => {
-    const key = row._id || ''
+  const catCounts = groupByDate(dishRows.data, 'categoryId')
+  const categoryDist = [...catCounts.entries()].map(([key, count]) => {
     const cat = catMap[key]
     return {
       _id: key,
       name: cat ? cat.name : '未分类',
       icon: cat ? cat.icon || '🍴' : '🍴',
-      count: row.count
+      count
     }
   })
   // 合并未分类
@@ -120,11 +182,11 @@ async function actionOverview() {
   mergedDist.sort((a, b) => b.count - a.count)
 
   let topWeek = []
-  const topRows = (topAgg.list || []).filter((row) => row._id)
+  const topRows = (topAgg.list || []).filter((row) => row._id).slice(0, 5 * 4)
   if (topRows.length) {
     const dishRes = await db
       .collection(DISH)
-      .where({ _id: _.in(topRows.map((row) => row._id)) })
+      .where(combine([{ _id: _.in(topRows.map((row) => row._id)) }, dishScope]))
       .field({ name: true, cover: true, categoryId: true })
       .get()
     const dishMap = {}
@@ -138,6 +200,7 @@ async function actionOverview() {
         actions: row.actions
       }))
       .filter((row) => !!row.dish)
+      .slice(0, 5)
   }
 
   return {
@@ -153,14 +216,20 @@ async function actionOverview() {
 }
 
 /** 采购清单：把一段时间内点过的菜的食材合并去重 */
-async function actionShoppingList(data = {}) {
+async function actionShoppingList(data = {}, openid) {
+  const user = await loadUser(openid)
   const days = Math.min(30, Math.max(1, Number(data.days) || 7))
   const end = beijingDate()
   const start = beijingDate(Date.now() - (days - 1) * 86400000)
 
   const orderRes = await db
     .collection(ORDER)
-    .where({ date: _.gte(start).and(_.lte(end)), status: _.neq('canceled') })
+    .where(
+      combine([
+        orderScopeCondition(user),
+        { date: _.gte(start).and(_.lte(end)), status: _.neq('canceled') }
+      ])
+    )
     .orderBy('date', 'desc')
     .limit(100)
     .get()
@@ -212,11 +281,12 @@ const ACTIONS = {
 
 exports.main = async (event = {}) => {
   const { action, data = {} } = event
+  const { OPENID } = cloud.getWXContext()
   const handler = ACTIONS[action]
   if (!handler) return fail(`未知操作: ${action}`, 1000)
 
   try {
-    const result = await handler(data)
+    const result = await handler(data, OPENID)
     if (result && typeof result.code === 'number' && 'msg' in result && result.data === undefined) {
       return result
     }

@@ -23,6 +23,12 @@
       }
     },
     {
+      "path": "pages/plan/index",
+      "style": {
+        "navigationBarTitleText": "周排菜"
+      }
+    },
+    {
       "path": "pages/kitchen/index",
       "style": {
         "navigationBarTitleText": "厨房"
@@ -56,6 +62,18 @@
       "path": "pages/category/manage",
       "style": {
         "navigationBarTitleText": "分类管理"
+      }
+    },
+    {
+      "path": "pages/family/index",
+      "style": {
+        "navigationBarTitleText": "我的家庭"
+      }
+    },
+    {
+      "path": "pages/family/browse",
+      "style": {
+        "navigationBarTitleText": "其他家庭的菜单"
       }
     },
     {

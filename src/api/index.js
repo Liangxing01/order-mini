@@ -20,6 +20,7 @@ export const dishApi = {
   removeBatch: (ids) => call(FN.dish, 'removeBatch', { ids }),
   batchMove: (data) => call(FN.dish, 'batchMove', data),
   toggleStatus: (data) => call(FN.dish, 'toggleStatus', data),
+  importDish: (id) => call(FN.dish, 'import', { _id: id }),
   track: (data) => call(FN.dish, 'track', data)
 }
 
@@ -55,4 +56,16 @@ export const userApi = {
   members: () => call(FN.user, 'members'),
   bind: (inviterOpenid) => call(FN.user, 'bind', { inviterOpenid }),
   removeMember: (openid) => call(FN.user, 'removeMember', { openid })
+}
+
+/** 家庭：创建 / 加入 / 成员管理 / 所有家庭（仅超级VIP） */
+export const familyApi = {
+  info: () => call(FN.family, 'info'),
+  create: (name) => call(FN.family, 'create', { name }),
+  join: (data) => call(FN.family, 'join', data),
+  leave: () => call(FN.family, 'leave'),
+  removeMember: (openid) => call(FN.family, 'removeMember', { openid }),
+  rename: (name) => call(FN.family, 'rename', { name }),
+  dissolve: () => call(FN.family, 'dissolve'),
+  list: () => call(FN.family, 'list')
 }

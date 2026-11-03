@@ -1,13 +1,13 @@
 {
-  "name": "路璐的专属小厨房",
-  "appid": "wx76218415d133148f",
+  "name": "share厨房",
+  "appid": "wx5ae7477421142432",
   "description": "家庭点菜小程序",
   "versionName": "1.0.0",
   "versionCode": "100",
   "transformPx": false,
   "vueVersion": "3",
   "mp-weixin": {
-    "appid": "wx76218415d133148f",
+    "appid": "wx5ae7477421142432",
     "setting": {
       "urlCheck": false,
       "es6": true,

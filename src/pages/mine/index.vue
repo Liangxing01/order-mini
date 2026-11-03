@@ -7,9 +7,9 @@
         <view class="hero__info">
           <view class="hero__name-row">
             <text class="hero__name">{{ userStore.nickname }}</text>
-            <text class="hero__role">{{ roleText }}</text>
+            <text class="hero__role">{{ userStore.roleText }}</text>
           </view>
-          <text class="hero__sub">{{ userStore.profile ? userStore.profile.memberTotal || 1 : 1 }} 位家人共享这个小厨房</text>
+          <text class="hero__sub">{{ heroSub }}</text>
         </view>
         <text class="hero__arrow">›</text>
       </view>
@@ -33,13 +33,17 @@
       </view>
     </view>
 
-    <!-- 家庭成员 -->
+    <!-- 家庭与成员 -->
     <view class="card u-card">
       <view class="card__head">
-        <text class="card__title">家庭成员</text>
-        <button class="card__share" open-type="share">＋ 邀请家人</button>
+        <text class="card__title">{{ family ? family.name : '还未加入家庭' }}</text>
+        <view class="card__ops">
+          <button v-if="family" class="card__share" open-type="share">＋ 邀请</button>
+          <text class="card__more" @tap="goFamily">管理 ›</text>
+        </view>
       </view>
       <view v-if="membersLoading" class="u-loading">加载中…</view>
+      <view v-else-if="!members.length" class="u-muted members__empty">{{ emptyMembersText }}</view>
       <view v-else class="members">
         <view v-for="member in members" :key="member._id" class="member">
           <cloud-image
@@ -52,24 +56,27 @@
           <view class="member__info">
             <text class="member__name">
               {{ member.nickName || '未命名家人' }}
-              <text v-if="member.isSelf" class="member__self">（我）</text>
+              <text v-if="member._id === userStore.openid" class="member__self">（我）</text>
             </text>
-            <text class="member__role">{{ member.role === 'admin' ? '管理员' : '成员' }}</text>
+            <text class="member__role">{{ member.familyRole === 'owner' ? '房主' : '成员' }}</text>
           </view>
-          <text
-            v-if="canRemove(member)"
-            class="member__remove"
-            @tap.stop="removeMember(member)"
-          >
-            移除
-          </text>
         </view>
-        <view v-if="!members.length" class="u-muted members__empty">还没有其他家人加入，分享给他们打开就自动加入</view>
       </view>
     </view>
 
     <!-- 功能列表 -->
     <view class="card u-card">
+      <view class="cell" @tap="goFamily">
+        <text class="cell__icon">🏡</text>
+        <text class="cell__text">我的家庭</text>
+        <text class="cell__hint">{{ family ? family.name : '未加入' }}</text>
+        <text class="cell__arrow">›</text>
+      </view>
+      <view v-if="userStore.isSuperVip" class="cell" @tap="goBrowse">
+        <text class="cell__icon">🌏</text>
+        <text class="cell__text">浏览其他家庭的菜单</text>
+        <text class="cell__arrow">›</text>
+      </view>
       <view class="cell" @tap="goCategory">
         <text class="cell__icon">🗂️</text>
         <text class="cell__text">分类管理</text>
@@ -138,7 +145,7 @@
 <script>
 import { useUserStore } from '@/store/user'
 import { useMenuStore } from '@/store/menu'
-import { userApi, statsApi } from '@/api'
+import { statsApi, familyApi } from '@/api'
 import { call, uploadImage } from '@/api/cloud'
 import { FN } from '@/config'
 import { toast, toastOk, toastError, confirm, showLoading, hideLoading } from '@/utils/ui'
@@ -148,6 +155,7 @@ export default {
     return {
       statusBarHeight: 20,
       stats: { dishTotal: 0, categoryTotal: 0, monthOrderTotal: 0 },
+      family: null,
       members: [],
       membersLoading: false,
       profileVisible: false,
@@ -165,8 +173,15 @@ export default {
     avatarUrl() {
       return this.userStore.avatar || '/static/chef-avatar.png'
     },
-    roleText() {
-      return this.userStore.isAdmin ? '管理员' : '成员'
+    heroSub() {
+      if (!this.family) return '还没有加入家庭，去「我的家庭」看看'
+      return `${this.family.name} · ${this.members.length} 位家人`
+    },
+    emptyMembersText() {
+      if (!this.family) {
+        return this.userStore.isVip ? '还没创建家庭，去「我的家庭」建一个吧' : '普通用户无法创建家庭，等房主发邀请给你'
+      }
+      return '还没有其他家人加入，把家庭邀请分享给他们就自动加入'
     }
   },
 
@@ -177,14 +192,18 @@ export default {
 
   onShow() {
     this.userStore.bootstrap(true)
-    this.loadMembers()
+    this.loadFamily()
     this.loadStats()
   },
 
   onShareAppMessage() {
+    const family = this.family
+    if (!family) {
+      return { title: '来我们的小厨房点菜吧', path: '/pages/order/index' }
+    }
     return {
-      title: '来加入我们的小厨房吧',
-      path: `/pages/order/index?inviter=${this.userStore.openid}`
+      title: `${this.userStore.nickname} 邀请你加入「${family.name}」`,
+      path: `/pages/order/index?familyId=${family._id}&inviter=${this.userStore.openid}`
     }
   },
 
@@ -198,31 +217,16 @@ export default {
       }
     },
 
-    async loadMembers() {
+    async loadFamily() {
       this.membersLoading = true
       try {
-        const res = await userApi.members()
-        this.members = res.list || []
+        const res = await familyApi.info()
+        this.family = res.family
+        this.members = res.members || []
       } catch (err) {
-        toastError(err, '成员加载失败')
+        toastError(err, '家庭信息加载失败')
       } finally {
         this.membersLoading = false
-      }
-    },
-
-    canRemove(member) {
-      return this.userStore.isAdmin && !member.isSelf
-    },
-
-    async removeMember(member) {
-      const ok = await confirm(`确定把「${member.nickName}」移出小厨房吗？`, '移除成员', '移除')
-      if (!ok) return
-      try {
-        await userApi.removeMember(member._id)
-        toastOk('已移除')
-        this.loadMembers()
-      } catch (err) {
-        toastError(err)
       }
     },
 
@@ -303,6 +307,12 @@ export default {
 
     goCategory() {
       uni.navigateTo({ url: '/pages/category/manage' })
+    },
+    goFamily() {
+      uni.navigateTo({ url: '/pages/family/index' })
+    },
+    goBrowse() {
+      uni.navigateTo({ url: '/pages/family/browse' })
     },
     goManage() {
       uni.navigateTo({ url: '/pages/dish/manage' })
@@ -466,6 +476,18 @@ export default {
   }
 }
 
+.card__ops {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.card__more {
+  margin-left: 16rpx;
+  font-size: 23rpx;
+  color: $c-primary-ink;
+}
+
 .members__empty {
   padding: 20rpx 0;
   font-size: 23rpx;
@@ -513,12 +535,6 @@ export default {
   margin-top: 4rpx;
   font-size: 21rpx;
   color: $c-text-3;
-}
-
-.member__remove {
-  font-size: 22rpx;
-  color: $c-danger;
-  padding: 10rpx 6rpx;
 }
 
 .cell {

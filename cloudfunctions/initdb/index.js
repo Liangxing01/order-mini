@@ -5,7 +5,7 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
 const db = cloud.database()
 
 /** 需要的集合，首次部署后调用一次本函数即可建好 */
-const COLLECTIONS = ['dish', 'category', 'order', 'hot_log', 'user']
+const COLLECTIONS = ['dish', 'category', 'order', 'hot_log', 'user', 'family']
 
 /** 初始化分类，与设计稿左侧栏保持一致 */
 const DEFAULT_CATEGORIES = [

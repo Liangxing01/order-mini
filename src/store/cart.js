@@ -22,7 +22,9 @@ export const useCartStore = defineStore('cart', {
       items: cached.items || [],
       orderDate: cached.orderDate || today(),
       mealType: cached.mealType || defaultMeal(),
-      submitting: false
+      submitting: false,
+      /** 周排菜页点🛒后回点菜页，由 onShow 消费一次 */
+      openCartOnBack: false
     }
   },
 

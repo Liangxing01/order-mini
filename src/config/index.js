@@ -3,7 +3,7 @@
  * 小程序只有一个云开发环境时留空即可，会自动使用默认环境；
  * 存在多个环境时填写控制台里的环境 ID，例如 'lulu-prod-8gk1a2b3c4d5e6'。
  */
-export const CLOUD_ENV = 'lulu-d2g9yofzq8e451dea'
+export const CLOUD_ENV = 'lulu-d2g9u2p3v83150f9f'
 
 /** 云函数名 */
 export const FN = {
@@ -14,7 +14,8 @@ export const FN = {
   order: 'order',
   rank: 'rank',
   stats: 'stats',
-  file: 'file'
+  file: 'file',
+  family: 'family'
 }
 
 /** 餐次 */

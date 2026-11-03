@@ -76,9 +76,10 @@
         scroll-y
         :show-scrollbar="false"
         :lower-threshold="120"
+        :scroll-into-view="scrollAnchor"
         @scrolltolower="loadMore"
       >
-        <view class="dishes__head">
+        <view id="dish-top" class="dishes__head">
           <text class="dishes__title">{{ listTitle }}</text>
           <text class="dishes__count">({{ dishes.length }})</text>
         </view>
@@ -178,13 +179,7 @@
       </template>
     </bottom-sheet>
 
-    <!-- 周排菜：7 天 × 早/午/晚 -->
-    <plan-week
-      v-if="weekMode"
-      :start-date="weekStartDate"
-      @close="weekMode = false"
-      @cart="onPlanCart"
-    />
+    <!-- 周排菜已改为独立页面 pages/plan/index，用页面栈返回 -->
   </view>
 </template>
 
@@ -192,17 +187,17 @@
 import { useUserStore } from '@/store/user'
 import { useMenuStore } from '@/store/menu'
 import { useCartStore } from '@/store/cart'
-import { orderApi, userApi, dishApi } from '@/api'
+import { orderApi, userApi, dishApi, familyApi } from '@/api'
 import { MEAL_TYPES } from '@/config'
 import { today, shiftDate, weekStartOf } from '@/utils/date'
 import { toast, toastOk, toastError, confirm, tapFeedback } from '@/utils/ui'
 
-/** 分享卡片带 inviter，小程序码带 scene=inviter%3Dxxx，两种入口都兼容 */
-function readInviter(query = {}) {
-  if (query.inviter) return query.inviter
+/** 分享卡片带参数，小程序码带 scene=familyId%3Dxxx%26inviter%3Dyyy，两种入口都兼容 */
+function readParam(query = {}, key) {
+  if (query[key]) return query[key]
   if (!query.scene) return ''
   try {
-    const matched = /inviter=([^&]+)/.exec(decodeURIComponent(query.scene))
+    const matched = new RegExp(`${key}=([^&]+)`).exec(decodeURIComponent(query.scene))
     return matched ? matched[1] : ''
   } catch (err) {
     return ''
@@ -215,14 +210,13 @@ export default {
       statusBarHeight: 20,
       searchInput: '',
       searchTimer: null,
+      // 切换分类 / 搜索时右侧列表回到顶部（小程序 scroll-view 换内容不会自动归零）
+      scrollAnchor: '',
       sortBy: 'createTime',
 
       meals: MEAL_TYPES,
       mealVisible: false,
       cartVisible: false,
-      /** 周排菜视图 */
-      weekMode: false,
-      weekStartDate: '',
       maxDate: shiftDate(today(), 30)
     }
   },
@@ -279,24 +273,46 @@ export default {
   onLoad(query) {
     const info = uni.getSystemInfoSync()
     this.statusBarHeight = info.statusBarHeight || 20
-    // 分享卡片带 inviter，小程序码带 scene=inviter%3Dxxx，进来就自动并入这个家
-    const inviter = readInviter(query)
-    if (inviter) {
+    // 分享进来：带 familyId 直接加入家庭，老邀请卡片只有 inviter 就按邀请人找家庭
+    const familyId = readParam(query, 'familyId')
+    const inviter = readParam(query, 'inviter')
+    if (familyId) {
+      familyApi
+        .join({ familyId, inviterOpenid: inviter })
+        .then((res) => {
+          this.userStore.bootstrap(true)
+          if (res && res.alreadyIn) return
+          toastOk('已加入家庭小厨房')
+        })
+        .catch((err) => toast((err && err.msg) || '加入家庭失败'))
+    } else if (inviter) {
       userApi
         .bind(inviter)
-        .then(() => toastOk('已加入家庭小厨房'))
+        .then(() => {
+          this.userStore.bootstrap(true)
+          toastOk('已加入家庭小厨房')
+        })
         .catch(() => undefined)
     }
   },
 
   onShow() {
     this.loadAll()
+    // 从周排菜页点🛒回来时直接弹出购物车
+    if (this.cart.openCartOnBack) {
+      this.cart.openCartOnBack = false
+      this.cartVisible = true
+    }
   },
 
   onShareAppMessage() {
+    const familyId = this.userStore.familyId
+    const path = familyId
+      ? `/pages/order/index?familyId=${familyId}&inviter=${this.userStore.openid}`
+      : `/pages/order/index?inviter=${this.userStore.openid}`
     return {
       title: `${this.userStore.nickname} 邀请你一起来点菜`,
-      path: `/pages/order/index?inviter=${this.userStore.openid}`
+      path
     }
   },
 
@@ -318,11 +334,25 @@ export default {
     async selectCat(id) {
       if (id === this.menu.currentId && !this.menu.keyword) return
       this.menu.setCurrent(id)
+      this.searchInput = ''
+      this.scrollToTop()
       try {
         await this.menu.loadDishes()
       } catch (err) {
         toastError(err)
       }
+    },
+
+    /** scroll-into-view 同一个值不会重复触发，先清空再设回 */
+    scrollToTop() {
+      if (!this.scrollAnchor) {
+        this.scrollAnchor = 'dish-top'
+        return
+      }
+      this.scrollAnchor = ''
+      this.$nextTick(() => {
+        this.scrollAnchor = 'dish-top'
+      })
     },
 
     async loadMore() {
@@ -388,6 +418,7 @@ export default {
 
     async onSearch() {
       const keyword = this.searchInput.trim()
+      this.scrollToTop()
       try {
         if (!keyword) {
           this.menu.clearSearch()
@@ -403,6 +434,7 @@ export default {
       this.searchInput = ''
       clearTimeout(this.searchTimer)
       this.menu.clearSearch()
+      this.scrollToTop()
     },
 
     onDateChange(e) {
@@ -462,14 +494,7 @@ export default {
     },
 
     openPlan() {
-      this.weekStartDate = weekStartOf(this.cart.orderDate)
-      this.weekMode = true
-    },
-
-    /** 周排菜里点了购物车，回到点菜页看已选的菜 */
-    onPlanCart() {
-      this.weekMode = false
-      this.cartVisible = true
+      uni.navigateTo({ url: `/pages/plan/index?start=${weekStartOf(this.cart.orderDate)}` })
     },
 
     goRank() {

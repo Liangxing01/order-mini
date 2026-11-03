@@ -8,10 +8,37 @@ export const useUserStore = defineStore('user', {
   }),
 
   getters: {
-    isAdmin: (s) => !!s.profile && s.profile.role === 'admin',
+    /** 平台角色：supervip 看所有家庭，vip 看本家庭，user 只看自己 */
+    role: (s) => {
+      const role = s.profile && s.profile.role
+      // 历史数据的 admin / member 归一化成 vip
+      if (role === 'admin' || role === 'member') return 'vip'
+      return role || 'user'
+    },
+    isSuperVip() {
+      return this.role === 'supervip'
+    },
+    /** vip 与 supervip 都能建家庭、看家庭菜单 */
+    isVip() {
+      return this.isSuperVip || this.role === 'vip'
+    },
+    /** 当前家庭房主 */
+    isOwner: (s) => !!(s.profile && s.profile.isOwner),
+    familyId: (s) => (s.profile && s.profile.familyId) || '',
+    familyName: (s) => (s.profile && s.profile.familyName) || '',
+    /** 兼容旧代码 */
+    isAdmin() {
+      return this.isOwner || this.isSuperVip
+    },
     nickname: (s) => (s.profile && s.profile.nickName) || '家人',
     avatar: (s) => (s.profile && s.profile.avatar) || '',
-    openid: (s) => (s.profile && s.profile._id) || ''
+    openid: (s) => (s.profile && s.profile._id) || '',
+    /** 角色文案，用于「我」页头像旁的小标签 */
+    roleText() {
+      if (this.isSuperVip) return '超级VIP'
+      if (this.role === 'vip') return this.isOwner ? '家庭房主' : '家庭VIP'
+      return '普通用户'
+    }
   },
 
   actions: {

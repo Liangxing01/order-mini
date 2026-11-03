@@ -2,6 +2,8 @@
 
 家庭点菜微信小程序。uni-app（Vue 3 + Vite）前端 + 微信云开发（云函数 + 云数据库 + 云存储）后端。
 
+> 功能说明文档统一放在 [`docs/`](docs/README.md)，每加一个功能就补一篇。
+
 ## 功能
 
 - **点菜**：左侧分类栏 + 右侧双列菜品卡；搜索、日期/餐次选择、购物车、随机点菜、邀请下单；点「下单」即完成记账，不再有二次确认弹窗
@@ -12,7 +14,8 @@
 - **热度排行**：周榜 / 月榜 / 总榜，算法 `下单×3 + 加购×1 + 浏览×0.2`
 - **食记**：食记 / 排菜计划 双页签，点卡片进入订单详情（菜品明细、菜量、备注、再来一单/撤销/加入购物车），计划也可直接加入购物车；普通订单一律 `status: finished`，不再有待确认环节
 - **厨房**：概览、分类分布、近 7 天最常点、最近添加、采购清单（按天数合并食材用量）
-- **我**：资料编辑、家庭成员、邀请、初始化数据库
+- **我**：资料编辑、家庭与成员管理（创建/改名/邀请/移除/退出/解散）、角色标签、初始化数据库
+- **角色与家庭**：三级角色——超级VIP（看所有家庭菜单，可把别家菜品复制到自己菜单）、普通VIP（只看本家庭成员菜单，可创建家庭）、普通用户（只看自己创建的菜，不能创建家庭）；一个账号只能加入一个家庭，房主可添加/移除成员
 - **图片优化**：全站图片走 `cloud-image` 组件——默认 `lazy-load` 懒加载 + `imageView2/2/w/{宽度}` 缩略图 + 加载淡入，失败自动退回原图
 
 ## 目录结构
@@ -25,15 +28,17 @@ src/
   pages/
     order/        点菜首页（tabBar）
     record/       食记（tabBar）+ detail 订单详情
+    plan/         周排菜（独立页面，页面栈返回）
     kitchen/      厨房（tabBar）
     mine/         我（tabBar）
     dish/         edit / detail / manage
     category/     manage
+    family/       index 家庭管理 / browse 浏览其他家庭菜单（超级VIP）
     rank/         热度排行
   static/         tabbar 图标、hero 插画、头像
   store/          pinia：user / menu / cart
   utils/          date.js / image.js / ui.js
-cloudfunctions/   initdb / user / category / dish / order / rank / stats / file
+cloudfunctions/   initdb / user / category / dish / order / rank / stats / file / family
 scripts/          gen-tabbar-icons.js / optimize-images.js / sync-cloud.js
 ```
 
@@ -71,9 +76,9 @@ npm run build:mp-weixin
 
 ### 4. 上传云函数
 
-右键 `cloudfunctions` 下的每个目录 → **上传并部署：云端安装依赖**，共 8 个：
+右键 `cloudfunctions` 下的每个目录 → **上传并部署：云端安装依赖**，共 9 个：
 
-`initdb`、`user`、`category`、`dish`、`order`、`rank`、`stats`、`file`
+`initdb`、`user`、`category`、`dish`、`order`、`rank`、`stats`、`file`、`family`
 
 > `cloudfunctions/initdb/config.json` 里已写 `{"timeout": 20}`，上传部署时会自动生效，无需手动改。若已被部署过且报超时，可在云开发控制台 → 云函数 → `initdb` → 配置 → 超时时间 改为 20 秒。
 
@@ -81,7 +86,7 @@ npm run build:mp-weixin
 
 编译后在小程序里：**我 → 初始化数据库 → 开始**。
 
-`initdb` 会创建集合 `dish`、`category`、`order`、`hot_log`、`user`，并在分类表为空时写入 7 个默认分类（主食🍚 / 荤🥩 / 素🥬 / 蛋🍳 / 汤🥣 / 喝🧋 / 空气炸锅🍟）。
+`initdb` 会创建集合 `dish`、`category`、`order`、`hot_log`、`user`、`family`，并在分类表为空时写入 7 个默认分类（主食🍚 / 荤🥩 / 素🥬 / 蛋🍳 / 汤🥣 / 喝🧋 / 空气炸锅🍟）。
 
 ### 6. 建索引（建议）
 
@@ -97,7 +102,7 @@ npm run build:mp-weixin
 
 ### 7. 数据库权限
 
-5 个集合的权限全部设为 **「仅管理端可读写」**（自定义规则 `{"read": false, "write": false}`）。所有读写都经由云函数，云函数使用管理员权限，不受该限制。
+6 个集合的权限全部设为 **「仅管理端可读写」**（自定义规则 `{"read": false, "write": false}`）。所有读写都经由云函数，云函数使用管理员权限，不受该限制。
 
 云存储权限不用改（免费套餐也改不了安全规则）：如果是「仅创建者可读写」也没关系，图片链接走 `file` 云函数换取，云函数是管理端权限，家人和体验者照样能看到别人上传的图。
 
@@ -109,8 +114,9 @@ npm run build:mp-weixin
 | --- | --- |
 | initdb | 无 action，直接调用 |
 | user | `me` / `update` / `members` / `bind` / `removeMember` |
+| family | `create` / `info` / `join` / `leave` / `removeMember` / `rename` / `dissolve` / `list` |
 | category | `list` / `create` / `update` / `remove` / `sort` |
-| dish | `list` / `detail` / `create` / `update` / `remove` / `removeBatch` / `batchMove` / `toggleStatus` / `track` |
+| dish | `list` / `detail` / `create` / `update` / `remove` / `removeBatch` / `batchMove` / `toggleStatus` / `import` / `track` |
 | order | `submit` / `list` / `detail` / `cancel` / `finish` / `repeat` / `randomPick` / `planSave` / `planMove` / `planClear` |
 | rank | `hot`（`range: week / month / all`） |
 | stats | `overview` / `shoppingList` |
@@ -126,4 +132,5 @@ npm run build:mp-weixin
 - 菜品图统一用 `<cloud-image>`（`size` 取 `avatar/thumb/card/cover/full`，对应 160/200/240/480/750px 宽）。`cloud://` fileID 会先用 `getTempFileURL` 换成 https 临时链接（客户端拿不到时走 `file` 云函数），再在链接上拼 `?imageView2/2/w/{宽度}` 由云存储 CDN 实时出缩略图；缩略图拉取失败时组件会自动回退原图，并把环境标记为「不支持图片处理」，因此无需担心白屏
 - `cloud-image` 默认懒加载，仅在页面 / `scroll-view` 滚动容器内生效；首屏头像等需要立即出现的图传 `:lazy="false"`
 - 微信 WXSS 不支持本地图片作 `background-image`，页面里统一用 `<image>` 元素铺底
-- 首个进入小程序的用户会被自动设为 `admin`，其余为 `member`；家人扫码或打开分享卡片进来即自动并入同一家庭（`familyId`），不需要邀请确认
+- 首个进入小程序的用户默认是 **普通用户**（`role: 'user'`），没有家庭；角色需要在云开发控制台 → 数据库 → `user` 集合里手动改（`supervip` / `vip` / `user`）
+- 历史数据的 `role: 'admin'` / `'member'` 会自动归一化成 `vip`，对应的 `admin` 视为房主（`familyRole: 'owner'`）；旧数据没有 `familyId` 时按「家庭之外的历史菜」处理，不会凭空消失

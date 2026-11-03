@@ -9,6 +9,7 @@ const ORDER = 'order'
 const DISH = 'dish'
 const HOT_LOG = 'hot_log'
 const USER = 'user'
+const FAMILY = 'family'
 
 function ok(data) {
   return { code: 0, msg: 'ok', data }
@@ -31,6 +32,88 @@ const DISH_FIELD = {
   status: true,
   tags: true,
   hot: true
+}
+
+/** 平台角色：supervip 看全部、vip 看本家庭、user 只看自己 */
+function normalizeRole(user) {
+  if (!user) return 'user'
+  if (user.role === 'admin' || user.role === 'member') return 'vip'
+  return user.role || 'user'
+}
+
+async function loadUser(openid) {
+  // 少传 openid 时 .doc() 只会抛「docId必须为字符串或数字」，这里给出可读的提示
+  if (!openid) throw new Error('未获取到用户身份，请重新进入小程序')
+  const res = await db.collection(USER).doc(openid).get().catch(() => null)
+  const user = (res && res.data) || {}
+  return {
+    openid,
+    nickName: user.nickName || '',
+    role: normalizeRole(user),
+    familyId: user.familyId || '',
+    familyRole: user.familyRole || ''
+  }
+}
+
+/** 家庭成员 openid 列表（一定包含自己） */
+async function memberOpenids(familyId, openid) {
+  if (!familyId) return [openid]
+  const res = await db.collection(USER).where({ familyId }).limit(100).get().catch(() => null)
+  const list = ((res && res.data) || []).map((row) => row._id).filter(Boolean)
+  if (list.indexOf(openid) === -1) list.push(openid)
+  return list
+}
+
+/**
+ * 订单可见范围。
+ * 超级VIP 传了 familyId 就看指定家庭；不传按自己的家庭走。
+ * 早期订单没有 familyId，按创建人是否同家庭成员兜住。
+ */
+async function orderScope(user, familyId) {
+  const target = user.role === 'supervip' && familyId ? familyId : user.familyId
+  if (!target) return { creatorOpenid: user.openid }
+  const openids = await memberOpenids(target, user.openid)
+  return _.or([
+    { familyId: target },
+    { familyId: _.in(['', null]), creatorOpenid: _.in(openids) },
+    { familyId: _.exists(false), creatorOpenid: _.in(openids) }
+  ])
+}
+
+/** 能否撤销 / 完成别人下的单：家庭房主和超级VIP */
+async function canManageOrder(user, order) {
+  if (!order) return false
+  if (user.role === 'supervip') return true
+  if (order.creatorOpenid === user.openid) return true
+  if (!user.familyId) return false
+  if (order.familyId && order.familyId !== user.familyId) return false
+  if (user.familyRole === 'owner') return true
+  const family = await db.collection(FAMILY).doc(user.familyId).get().catch(() => null)
+  return !!(family && family.data && family.data.ownerOpenid === user.openid)
+}
+
+/** 能否查看这条订单 / 排菜计划 */
+async function canViewOrder(user, order) {
+  if (!order) return false
+  if (user.role === 'supervip') return true
+  if (order.creatorOpenid === user.openid) return true
+  if (!user.familyId) return false
+  if (order.familyId) return order.familyId === user.familyId
+  const openids = await memberOpenids(user.familyId, user.openid)
+  return openids.indexOf(order.creatorOpenid) !== -1
+}
+
+/** 随机点菜的菜品池，与菜品列表用同一套可见范围 */
+function dishScope(user, familyId) {
+  if (user.role === 'supervip') return familyId ? { familyId } : null
+  if (user.familyId) {
+    return _.or([
+      { familyId: user.familyId },
+      { familyId: _.in(['', null]) },
+      { familyId: _.exists(false) }
+    ])
+  }
+  return { creatorOpenid: user.openid }
 }
 
 async function actionSubmit(data = {}, openid) {
@@ -75,8 +158,8 @@ async function actionSubmit(data = {}, openid) {
     }
   })
 
-  const userRes = await db.collection(USER).doc(openid).get().catch(() => null)
-  const creatorName = (userRes && userRes.data && userRes.data.nickName) || '家人'
+  const user = await loadUser(openid)
+  const creatorName = user.nickName || '家人'
 
   const now = Date.now()
   const totalCount = orderItems.reduce((sum, item) => sum + item.count, 0)
@@ -90,6 +173,7 @@ async function actionSubmit(data = {}, openid) {
     status: 'finished',
     creatorOpenid: openid,
     creatorName,
+    familyId: user.familyId,
     createTime: now
   }
 
@@ -124,23 +208,28 @@ async function actionSubmit(data = {}, openid) {
   return { _id: res._id, totalCount, date, mealType }
 }
 
-async function actionList(data = {}) {
+async function actionList(data = {}, openid) {
+  const user = await loadUser(openid)
   const page = Math.max(0, Number(data.page) || 0)
   const pageSize = Math.min(50, Number(data.pageSize) || 20)
 
-  const where = {}
+  const timeCondition = {}
   if (data.from && data.to) {
-    where.date = _.gte(data.from).and(_.lte(data.to))
+    timeCondition.date = _.gte(data.from).and(_.lte(data.to))
   } else if (data.from) {
-    where.date = _.gte(data.from)
+    timeCondition.date = _.gte(data.from)
   } else if (data.to) {
-    where.date = _.lte(data.to)
+    timeCondition.date = _.lte(data.to)
   }
   if (Array.isArray(data.statuses) && data.statuses.length) {
-    where.status = _.in(data.statuses)
+    timeCondition.status = _.in(data.statuses)
   } else if (data.status) {
-    where.status = data.status
+    timeCondition.status = data.status
   }
+
+  const conditions = [await orderScope(user, data.familyId)]
+  if (Object.keys(timeCondition).length) conditions.push(timeCondition)
+  const where = conditions.length > 1 ? _.and(conditions) : conditions[0]
 
   const res = await db
     .collection(ORDER)
@@ -154,10 +243,13 @@ async function actionList(data = {}) {
   return { list: res.data, page, pageSize }
 }
 
-async function actionDetail(data = {}) {
+async function actionDetail(data = {}, openid) {
   if (!data._id) return fail('缺少订单 ID', 1002)
   const res = await db.collection(ORDER).doc(data._id).get().catch(() => null)
   if (!res || !res.data) return fail('订单不存在', 1004)
+
+  const user = await loadUser(openid)
+  if (!(await canViewOrder(user, res.data))) return fail('没有权限查看这条食记', 1003)
   return res.data
 }
 
@@ -168,9 +260,8 @@ async function actionCancel(data = {}, openid) {
   if (!order) return fail('订单不存在', 1004)
   if (order.status === 'canceled') return { _id: data._id, status: 'canceled' }
 
-  const userRes = await db.collection(USER).doc(openid).get().catch(() => null)
-  const isAdmin = userRes && userRes.data && userRes.data.role === 'admin'
-  if (order.creatorOpenid !== openid && !isAdmin) {
+  const user = await loadUser(openid)
+  if (!(await canManageOrder(user, order))) {
     return fail('只能撤销自己下的单', 1003)
   }
 
@@ -178,18 +269,27 @@ async function actionCancel(data = {}, openid) {
   return { _id: data._id, status: 'canceled' }
 }
 
-async function actionFinish(data = {}) {
+async function actionFinish(data = {}, openid) {
   if (!data._id) return fail('缺少订单 ID', 1002)
+  const user = await loadUser(openid)
+  const res = await db.collection(ORDER).doc(data._id).get().catch(() => null)
+  const order = res && res.data
+  if (!order) return fail('订单不存在', 1004)
+  if (!(await canManageOrder(user, order))) return fail('没有权限操作这一单', 1003)
+
   await db.collection(ORDER).doc(data._id).update({ data: { status: 'finished' } })
   return { _id: data._id, status: 'finished' }
 }
 
 /** 再来一单：把历史订单里的菜还原成购物车结构 */
-async function actionRepeat(data = {}) {
+async function actionRepeat(data = {}, openid) {
   if (!data._id) return fail('缺少订单 ID', 1002)
   const res = await db.collection(ORDER).doc(data._id).get().catch(() => null)
   const order = res && res.data
   if (!order) return fail('订单不存在', 1004)
+
+  const user = await loadUser(openid)
+  if (!(await canViewOrder(user, order))) return fail('没有权限复用这条食记', 1003)
 
   const ids = [...new Set((order.items || []).map((item) => item.dishId))]
   if (!ids.length) return fail('这单没有可复用的菜品', 1004)
@@ -219,12 +319,17 @@ async function actionRepeat(data = {}) {
 }
 
 /** 随机点菜：冷门菜权重更高，避免总是抽到同几道 */
-async function actionRandomPick(data = {}) {
+async function actionRandomPick(data = {}, openid) {
+  const user = await loadUser(openid)
   const count = Math.min(10, Math.max(1, Number(data.count) || 3))
-  const where = { status: 'on' }
+
+  const conditions = [{ status: 'on' }]
   if (data.categoryId && data.categoryId !== 'all') {
-    where.categoryId = data.categoryId
+    conditions.push({ categoryId: data.categoryId })
   }
+  const scope = dishScope(user, data.familyId)
+  if (scope) conditions.push(scope)
+  const where = conditions.length > 1 ? _.and(conditions) : conditions[0]
 
   const res = await db.collection(DISH).where(where).limit(200).field(DISH_FIELD).get()
   const exclude = Array.isArray(data.excludeIds) ? data.excludeIds : []
@@ -282,11 +387,25 @@ function normalizePlanItems(rawItems) {
   return list
 }
 
-/** 一个日期 + 餐次只保留一份排菜计划 */
-async function findPlan(date, mealType) {
+/** 一个家庭里，一个日期 + 餐次只保留一份排菜计划 */
+async function findPlan(date, mealType, user) {
+  const conditions = [{ date }, { mealType }, { status: 'planned' }]
+  if (user.familyId) {
+    // 早期计划没有 familyId，一并认作本家庭的
+    conditions.push(
+      _.or([
+        { familyId: user.familyId },
+        { familyId: _.in(['', null]) },
+        { familyId: _.exists(false) }
+      ])
+    )
+  } else {
+    conditions.push({ creatorOpenid: user.openid })
+  }
+
   const res = await db
     .collection(ORDER)
-    .where({ date, mealType, status: 'planned' })
+    .where(_.and(conditions))
     .orderBy('updateTime', 'desc')
     .limit(1)
     .get()
@@ -345,7 +464,8 @@ async function actionPlanSave(data = {}, openid) {
   const items = normalizePlanItems(data.items)
   if (items.length > 30) return fail('单餐最多安排 30 道菜', 1002)
 
-  const existing = await findPlan(date, mealType)
+  const user = await loadUser(openid)
+  const existing = await findPlan(date, mealType, user)
 
   if (!items.length) {
     if (existing) await db.collection(ORDER).doc(existing._id).remove()
@@ -355,8 +475,7 @@ async function actionPlanSave(data = {}, openid) {
   const snap = await snapshotPlanItems(items)
   if (snap.missing) return fail(`有 ${snap.missing.length} 道菜已被删除，刷新后再试`, 1004)
 
-  const userRes = await db.collection(USER).doc(openid).get().catch(() => null)
-  const creatorName = (userRes && userRes.data && userRes.data.nickName) || '家人'
+  const creatorName = user.nickName || '家人'
   const now = Date.now()
   const doc = {
     date,
@@ -367,6 +486,7 @@ async function actionPlanSave(data = {}, openid) {
     status: 'planned',
     creatorOpenid: openid,
     creatorName,
+    familyId: user.familyId,
     updateTime: now
   }
 
@@ -381,7 +501,7 @@ async function actionPlanSave(data = {}, openid) {
 }
 
 /** 把整餐计划挪到另一个日期 / 餐次，目标已有计划时合并 */
-async function actionPlanMove(data = {}) {
+async function actionPlanMove(data = {}, openid) {
   if (!data._id) return fail('缺少计划 ID', 1002)
   const date = String(data.date || '').trim()
   if (!isDateString(date)) return fail('请选择用餐日期', 1002)
@@ -391,9 +511,12 @@ async function actionPlanMove(data = {}) {
   const plan = res && res.data
   if (!plan) return fail('计划不存在', 1004)
   if (plan.status !== 'planned') return fail('只有排菜计划可以移动', 1003)
+
+  const user = await loadUser(openid)
+  if (!(await canViewOrder(user, plan))) return fail('没有权限修改这个排菜计划', 1003)
   if (plan.date === date && plan.mealType === mealType) return plan
 
-  const target = await findPlan(date, mealType)
+  const target = await findPlan(date, mealType, user)
   const now = Date.now()
 
   if (target && target._id !== data._id) {
@@ -408,8 +531,15 @@ async function actionPlanMove(data = {}) {
   return { ...plan, date, mealType, updateTime: now }
 }
 
-async function actionPlanClear(data = {}) {
+async function actionPlanClear(data = {}, openid) {
   if (!data._id) return fail('缺少计划 ID', 1002)
+  const res = await db.collection(ORDER).doc(data._id).get().catch(() => null)
+  const plan = res && res.data
+  if (!plan) return { _id: data._id, removed: true }
+
+  const user = await loadUser(openid)
+  if (!(await canViewOrder(user, plan))) return fail('没有权限修改这个排菜计划', 1003)
+
   await db.collection(ORDER).doc(data._id).remove()
   return { _id: data._id, removed: true }
 }

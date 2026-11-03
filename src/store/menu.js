@@ -8,6 +8,11 @@ function emptyBucket() {
   return { list: [], page: 0, hasMore: true, loading: false, loaded: false }
 }
 
+/** 还没请求过的分类：返回「加载中」占位，切分类时右侧立刻清空，不会先显示空态或停在上一个分类 */
+function pendingBucket() {
+  return { list: [], page: 0, hasMore: true, loading: true, loaded: false }
+}
+
 export const useMenuStore = defineStore('menu', {
   state: () => ({
     categories: [],
@@ -46,7 +51,8 @@ export const useMenuStore = defineStore('menu', {
 
     currentBucket(state) {
       if (state.keyword) return state.searchBucket
-      return state.buckets[state.currentId] || emptyBucket()
+      if (!state.currentId) return emptyBucket()
+      return state.buckets[state.currentId] || pendingBucket()
     },
 
     currentDishes() {
